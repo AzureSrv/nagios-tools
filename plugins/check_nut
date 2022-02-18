@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# -*- encoding: utf-8 -*-
+
+# Name:
+#   Check Network UPS Tools
+#
+# Description:
+#   Nagios Plugin to use in conjunction with Network UPS Tools to keep track of
+#   your UPS in Nagios Core.
+#
+# Flags:
+#
+#   -d DEVICE   NUT Device Name
+#   -c CHG_W    Charge warning threshold (in percent, i.e. 50)
+#   -C CHG_C    Charge critical threshold (in percent, i.e. 50) 
+#   -l LOAD_W   Load warning threshold (in percent, i.e. 50)
+#   -L LOAD_C   Load critical threshold (in percent, i.e. 50)
+#
+#   NOTE: -c and -C are OPTIONAL so long as battery.charge.{low,warning} are
+#         visible via upsc
+#
+# Example Configuration:
+#
+#   define command {
+#       command_name    check_nut
+#       command_line    $USER1$/check_nut -d $ARG1$ -l $ARG2$ -L $ARG3$
+#   }
+#
+#   define service {
+#       use                     generic-service
+#       host_name               example_host
+#       service_description     Current Status
+#       check_command           check_nut!NUT_UPS_ID!70!90
+#       check_interval          1
+#   }
+
+import sys
+import argparse
+import subprocess
+
+PLUGIN_NAME = "check_nut"
+PLUGIN_DESC = "This plugin reports the status of the UPS using NUT"
+UPSC = "/bin/upsc"
+
+def parse_args():
+    """Uses argparse to parse arguments"""
+
+    # main parser
+    parser = argparse.ArgumentParser(description=PLUGIN_DESC)
+    parser.add_argument('-d', action='store',
+        dest="device", required=True,
+        help="NUT Device Name")
+
+    # charge specific
+    bat = parser.add_argument_group("Charge")
+    bat.add_argument('-c', action='store', type=int,
+        dest="chg_w",
+        help="Charge warning threshold (in percent, i.e. 50)")
+    bat.add_argument('-C', action='store', type=int,
+        dest="chg_c",
+        help="Charge critical threshold (in percent, i.e. 50)")
+
+    # load specific
+    load = parser.add_argument_group("Load")
+    load.add_argument('-l', action='store', type=int,
+        dest="load_w", required=True,
+        help="Load warning threshold (in percent, i.e. 50)")
+    load.add_argument('-L', action='store', type=int,
+        dest="load_c", required=True,
+        help="Load critical threshold (in percent, i.e. 50)")
+
+    # get args
+    args = parser.parse_args()
+
+    # verify args
+    if args.load_w > args.load_c:
+        print("Load warning cannot be greater than critical!")
+        sys.exit(-1)
+    if args.chg_w and args.chg_c and args.chg_w < args.chg_c:
+        print("Charge warning cannot be less than critical!")
+        sys.exit(-1)
+
+    # return
+    return args
+
+def main():
+    """Main Function"""
+
+    # parse args
+    args = parse_args()
+
+    # format prelim args
+    bat_warn = args.chg_w
+    bat_crit = args.chg_c
+    load_warn = args.load_w
+    load_crit = args.load_c
+
+    # get this
+    upsc_cmd = [UPSC, args.device]
+    ups_data = subprocess.check_output(
+        upsc_cmd, stderr=subprocess.DEVNULL
+    ).decode("utf-8")
+    for line in ups_data.split("\n"):
+        if "Error: Unknown UPS" in line:
+            print("Error! Bad device name!")
+            sys.exit(-1)
+        elif line.startswith("battery.charge:"):
+            bat_cur = int(line.replace("battery.charge: ", ""))
+        elif line.startswith("battery.charge.warning:") and not bat_warn:
+            bat_warn = int(line.replace("battery.charge.warning: ", ""))
+        elif line.startswith("battery.charge.low:") and not bat_crit:
+            bat_crit = int(line.replace("battery.charge.low: ", ""))
+        elif line.startswith("ups.load:"):
+            load_cur = int(line.replace("ups.load: ", ""))
+        elif line.startswith("ups.status:"):
+            status = line.replace("ups.status: ", "")
+        elif line.startswith("ups.model:"):
+            model = line.replace("ups.model: ", "")
+
+    # simplification
+    isOnBattery = "OB" in status
+    isOnLine    = "OL" in status
+    isCharging  = "CHRG" in status
+
+    # get status string
+    status_str = "WARNING - EDGE CASE"
+    if isOnBattery or load_cur >= load_warn:
+        status_str = "WARNING"
+    if bat_cur <= bat_crit or load_cur >= load_crit:
+        status_str = "CRITICAL"
+    if (isOnLine or isCharging) and (load_cur < load_warn):
+        status_str = "OK"
+
+    # format human readable
+    res =  f"UPS {status_str} - "
+    res += f"Model: {model}, Status: {status}, "
+    res += f"Charge: {bat_cur}%, Load: {load_cur}%"
+
+    # format nagios readable
+    res += "|"
+    res += f"Charge={bat_cur};{bat_warn};{bat_crit} "
+    res += f"Load={load_cur};{load_warn};{load_crit}"
+
+    # print
+    print(res)
+
+if __name__ == "__main__":
+    exit(main())

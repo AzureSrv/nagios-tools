@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# -*- encoding: utf-8 -*-
+
+# Name:
+#   Host Notification via Discord
+#
+# Description:
+#   Python script to use in conjunction with Nagios that sends you a message
+#   via a Discord webhook whenever a shost notification is triggered.
+#
+#   NOTE: Please be sure to set the Webhook/PFP URL inside of this file!
+#
+# Flags:
+#
+#   -n NOTIF    The string identifying the type of notification that is being sent 
+#               ($NOTIFICATIONTYPE$)
+#   -H HOST     The display name for the host ($HOSTALIAS$)
+#   -a ADDRESS  Address of the host ($HOSTADDRESS$)
+#   -s STATUS   A string indicating the last state of the service ($HOSTSTATE$)
+#   -o STDOUT   The first line of text output from the last service check 
+#               ($HOSTOUTPUT$)
+#
+# Example Configuration:
+#
+#   define command {
+#       command_name    notify-discord-service
+#       command_line    /usr/local/nagios/libexec/notify_discord_host.py -n "$NOTIFICATIONTYPE$" -H "$HOSTALIAS$" -a "$HOSTADDRESS$" -s "$HOSTSTATE$" -o "$HOSTOUTPUT$"
+#   }
+#
+#   define contact {
+#       contact_name    example_contact
+#       ...
+#       service_notifications_enabled   1
+#       service_notification_period     24x7
+#       service_notification_options    d,u,r,f,s
+#       service_notification_commands   notify-discord-host
+#       ...
+#   }
+
+import socket
+import argparse
+import requests
+from enum import Enum
+from datetime import datetime
+
+##################################################
+# Custom Vars Below, Please Change Me!
+##################################################
+
+BOT_NAME = "Nagios Notifier"
+BOT_PFP_URL = "https://example.com/link/to/profile_pic.png"
+WEBHOOK = "https://discord.com/api/webhooks/the_rest_goes_here"
+NAGIOS_HOST = "http://your.nagios.local"
+
+##################################################
+# DO NOT EDIT BELOW THIS LINE
+##################################################
+
+class DiscordColors(int, Enum):
+    """Main Color Enum, used in Discord embeds"""
+
+    # If you havent noticed already, yes this is literally
+    # getbootstrap.com's button color scheme, lmfao
+
+    PRIMARY = int(0x0069d9)
+    SECONDARY = int(0x5a6268)
+    SUCCESS = int(0x218838)
+    DANGER = int(0xc82333)
+    WARNING = int(0xe0a800)
+    INFO = int(0x138496)
+    LIGHT = int(0xe2e6ea)
+    DARK = int(0x23272b)
+
+def main():
+    """Main function"""
+
+    # format parser
+    parser = argparse.ArgumentParser(description='Notify admin of state changes via discord')
+    parser.add_argument('-n', '--notifType', dest='notif', help="The string identifying the type of notification that is being sent ($NOTIFICATIONTYPE$)")
+    parser.add_argument('-H', '--hostname', dest='host', help="The display name for the host ($HOSTALIAS$)")
+    parser.add_argument('-a', '--address', dest='address', help="Address of the host ($HOSTADDRESS$)")
+    parser.add_argument('-s', '--status', dest='status', help="A string indicating the last state of the host ($HOSTSTATE$)")
+    parser.add_argument('-o', '--output', dest='stdout', help="The first line of text output from the last host check ($HOSTOUTPUT$)")
+    args = parser.parse_args()
+
+    # check that every arg has a value
+    if not all(vars(args).values()):
+        print("Not enough args...")
+        return -1
+
+    # get color
+    if args.status == "UP":
+        color = DiscordColors.SUCCESS
+    elif args.status == "DOWN":
+        color = DiscordColors.DANGER
+    elif args.status == "UNREACHABLE":
+        color = DiscordColors.LIGHT
+    else:
+        color = DiscordColors.INFO
+
+    # format message contents
+    embed = {
+        "username": BOT_NAME,
+        "avatar_url": BOT_PFP_URL,
+        "content": "<@!337437436680339457>",
+        "embeds": [
+            {
+                "title": f"Nagios Host Notification - {args.notif}",
+                "description":
+                    f"Nagios has detected that `{args.host}` (`{args.address}`) has changed to `{args.status}`!\n"+
+                    f"```{args.stdout}```\n"+
+                    f"To get more information, visit [Nagios]({NAGIOS_HOST}/nagios/cgi-bin/status.cgi?host=all) while on OlympusNet!",
+                "color": color,
+                "timestamp": str(datetime.utcnow().isoformat()),
+                "footer": {
+                    "text": f"{__file__.split('/')[-1]} on '{socket.gethostname()}'"
+                }
+            }
+        ]
+    }
+
+    # send embed
+    requests.post(WEBHOOK, json=embed)
+
+if __name__ == "__main__":
+    exit(main())
